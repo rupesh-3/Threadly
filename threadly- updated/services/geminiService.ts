@@ -7,16 +7,18 @@ export const generateThreadlyAnalysis = async (
   history: string,
   scenario: ScenarioType,
   tone: number,
-  userContext: string
+  userContext: string,
+  apiKey?: string
 ): Promise<ThreadlyResponse> => {
 
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  // Use provided API key, fallback to environment variable, then localStorage
+  const finalApiKey = apiKey || import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('threadly_api_key');
 
-  if (!apiKey || apiKey === 'PLACEHOLDER_API_KEY') {
-    throw new Error("API Key is missing or invalid. Please check your .env.local file.");
+  if (!finalApiKey || finalApiKey === 'PLACEHOLDER_API_KEY') {
+    throw new Error("API Key is missing. Please configure your Gemini API key in Settings.");
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: finalApiKey });
 
   const toneDescriptor = tone < 33 ? "Casual" : tone < 66 ? "Neutral/Balanced" : "Formal/Professional";
 

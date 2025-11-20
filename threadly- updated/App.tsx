@@ -38,6 +38,8 @@ const App: React.FC = () => {
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackEntry[]>([]);
   const [copiedResponses, setCopiedResponses] = useState<CopiedResponse[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +49,9 @@ const App: React.FC = () => {
     
     const savedCopied = localStorage.getItem('threadly_copied');
     if (savedCopied) setCopiedResponses(JSON.parse(savedCopied));
+    
+    const savedApiKey = localStorage.getItem('threadly_api_key');
+    if (savedApiKey) setApiKey(savedApiKey);
   }, []);
 
   useEffect(() => {
@@ -76,10 +81,11 @@ const App: React.FC = () => {
     setResult(null);
     
     try {
-      const data = await generateThreadlyAnalysis(history, scenario, tone, userContext);
+      const data = await generateThreadlyAnalysis(history, scenario, tone, userContext, apiKey);
       setResult(data);
     } catch (err) {
-      setError("Connection interrupted. Check your inputs and try again.");
+      const errorMsg = err instanceof Error ? err.message : "Connection interrupted. Check your inputs and try again.";
+      setError(errorMsg);
       console.error(err);
     } finally {
       setLoading(false);
@@ -368,26 +374,90 @@ const App: React.FC = () => {
         )}
 
         {activeView === 'settings' && (
-          <div className="max-w-2xl mx-auto bg-[#0f172a] border border-white/10 rounded-2xl p-8 space-y-8 animate-slide-up">
-            <div>
-              <h2 className="text-2xl font-display font-bold text-white">System Settings</h2>
-              <p className="text-slate-400 text-sm mt-1">Data Management Protocol</p>
-            </div>
-            
-            <div className="space-y-6">
-               <div className="flex items-center justify-between py-4 border-b border-white/5">
-                 <div>
-                   <h3 className="font-medium text-white text-sm">Local Storage</h3>
-                   <p className="text-xs text-slate-500 mt-1">Device-only persistence.</p>
-                 </div>
-                 <div className="text-right px-4 py-2 rounded bg-[#020617] border border-white/10">
-                   <span className="text-lg font-mono font-bold text-white block">{feedbackHistory.length}</span>
-                   <span className="text-[10px] uppercase tracking-wider text-slate-500">Records</span>
-                 </div>
-               </div>
+          <div className="max-w-2xl mx-auto space-y-8 animate-slide-up">
+            {/* API Key Settings */}
+            <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-8 space-y-6">
+              <div>
+                <h2 className="text-2xl font-display font-bold text-white">API Configuration</h2>
+                <p className="text-slate-400 text-sm mt-1">Set up your Gemini API key to use Threadly</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold uppercase tracking-widest text-slate-500 block mb-2">Gemini API Key</label>
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="Paste your Gemini API key here..."
+                      className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-0 outline-none transition-all font-mono text-sm pr-12"
+                    />
+                    <button
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                      title={showApiKey ? 'Hide' : 'Show'}
+                    >
+                      {showApiKey ? '👁️' : '👁️‍🗨️'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Get your free API key at{' '}
+                    <a 
+                      href="https://aistudio.google.com/app/apikey" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 underline"
+                    >
+                      Google AI Studio
+                    </a>
+                  </p>
+                </div>
 
-               <div className="pt-4">
-                 <button 
+                <button
+                  onClick={() => {
+                    localStorage.setItem('threadly_api_key', apiKey);
+                    showToast('API key saved successfully!');
+                  }}
+                  disabled={!apiKey.trim()}
+                  className={`w-full py-3 rounded-xl font-display font-bold tracking-wide transition-all duration-200 uppercase text-sm ${
+                    apiKey.trim()
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                  }`}
+                >
+                  Save API Key
+                </button>
+
+                {apiKey && (
+                  <div className="p-3 bg-emerald-950/30 border border-emerald-900/50 text-emerald-400 rounded-lg text-xs font-mono">
+                    ✓ API key is configured
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Data Management Settings */}
+            <div className="bg-[#0f172a] border border-white/10 rounded-2xl p-8 space-y-6">
+              <div>
+                <h2 className="text-2xl font-display font-bold text-white">Data Management</h2>
+                <p className="text-slate-400 text-sm mt-1">Manage your local storage</p>
+              </div>
+              
+              <div className="space-y-6">
+                <div className="flex items-center justify-between py-4 border-b border-white/5">
+                  <div>
+                    <h3 className="font-medium text-white text-sm">Local Storage</h3>
+                    <p className="text-xs text-slate-500 mt-1">Device-only persistence.</p>
+                  </div>
+                  <div className="text-right px-4 py-2 rounded bg-[#020617] border border-white/10">
+                    <span className="text-lg font-mono font-bold text-white block">{feedbackHistory.length}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500">Records</span>
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button 
                     onClick={() => {
                       if(window.confirm("Confirm deletion of all local data?")) {
                         setFeedbackHistory([]);
@@ -398,11 +468,12 @@ const App: React.FC = () => {
                       }
                     }}
                     className="flex items-center justify-center gap-2 text-red-400 hover:bg-red-950/20 hover:text-red-300 px-6 py-3 rounded-lg transition-colors w-full border border-red-900/30 text-sm font-bold uppercase tracking-wider"
-                 >
-                   <LogOut size={16} />
-                   Purge Local Data
-                 </button>
-               </div>
+                  >
+                    <LogOut size={16} />
+                    Purge Local Data
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
