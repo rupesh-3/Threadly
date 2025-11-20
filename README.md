@@ -2,6 +2,8 @@
 
 Threadly is an intelligent communication assistant that analyzes conversation contexts and generates strategic response options with predicted outcomes. Get AI-driven coaching on how to communicate effectively in any scenario.
 
+<img width="1358" height="2663" alt="image" src="https://github.com/user-attachments/assets/bf54677d-e58f-4e39-a056-029d48798a54" />
+
 ## 🎯 What is Threadly?
 
 Threadly uses advanced AI (Google Gemini) to help you navigate complex conversations by:
@@ -46,10 +48,16 @@ Preview how conversations might unfold with:
 - Analyze patterns across scenarios
 - Monitor feedback outcomes
 
+<img width="1358" height="739" alt="image" src="https://github.com/user-attachments/assets/5ab97b6e-1f07-4bf7-b56c-7041ad62dc23" />
+
 ### 💾 Local Data Storage
-- Feedback history saved to browser localStorage
-- Copy tracking for frequently used responses
-- Privacy-first approach with no server-side tracking
+- Stores your API key securely on your device using browser localStorage
+- No cloud or backend storage — your data stays on your device only
+- Lets you clear all saved data instantly using Purge Local Data
+- Shows the number of stored records for transparency
+- Ensures privacy-focused behaviour: no syncing, no tracking, no external logging
+
+<img width="1358" height="886" alt="image" src="https://github.com/user-attachments/assets/280707db-37f1-4f8d-99a7-a5e6f2fbcb6c" />
 
 ## 🚀 Quick Start
 
