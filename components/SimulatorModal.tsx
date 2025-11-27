@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import { StrategyResponse, SimulatorData } from '../types';
 
@@ -13,6 +13,18 @@ const SimulatorModal: React.FC<SimulatorModalProps> = ({ isOpen, onClose, select
   const [messages, setMessages] = useState<{ id: number; role: 'user' | 'them'; text: string; visible: boolean }[]>([]);
   const [step, setStep] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Handle escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
 
   // Reset simulation when opened
   useEffect(() => {
@@ -45,24 +57,45 @@ const SimulatorModal: React.FC<SimulatorModalProps> = ({ isOpen, onClose, select
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, step]);
 
+  const handleRestart = useCallback(() => {
+    setStep(0);
+    setMessages(prev => prev.map(m => ({ ...m, visible: false })));
+  }, []);
+
   if (!isOpen || !selectedResponse) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-fade-in">
-      <div className="bg-[#0f172a] rounded-2xl shadow-2xl border border-white/10 w-full max-w-sm overflow-hidden flex flex-col h-[80vh] max-h-[800px] relative">
+    <div 
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="simulator-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div 
+        ref={modalRef}
+        className="bg-[#0f172a] rounded-2xl shadow-2xl border border-white/10 w-full max-w-sm overflow-hidden flex flex-col h-[80vh] max-h-[800px] relative"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="pt-6 pb-4 px-6 bg-[#0f172a] border-b border-white/5 flex justify-between items-center z-10">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold border border-white/5">
+            <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold border border-white/5" aria-hidden="true">
                ?
             </div>
             <div>
-              <h3 className="font-bold text-white text-sm">Simulated User</h3>
-              <p className="text-[10px] text-emerald-400 font-mono uppercase tracking-wide">Online</p>
+              <h3 id="simulator-title" className="font-bold text-white text-sm">Simulated User</h3>
+              <p className="text-[10px] text-emerald-400 font-mono uppercase tracking-wide" aria-label="Status: Online">Online</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded transition-colors text-slate-400">
+          <button 
+            onClick={onClose} 
+            aria-label="Close simulator"
+            className="p-2 hover:bg-white/10 rounded transition-colors text-slate-400 focus:ring-2 focus:ring-white/30 focus:outline-none min-w-[44px] min-h-[44px] flex items-center justify-center"
+          >
             <X size={20} />
           </button>
         </div>
@@ -108,8 +141,9 @@ const SimulatorModal: React.FC<SimulatorModalProps> = ({ isOpen, onClose, select
         {/* Footer */}
         <div className="p-4 border-t border-white/5 bg-[#0f172a]">
             <button 
-                onClick={() => { setStep(0); setMessages(prev => prev.map(m => ({...m, visible: false}))); }}
-                className="w-full py-3 px-4 bg-white/5 hover:bg-white/10 border border-white/5 text-slate-300 font-bold uppercase text-xs tracking-wider rounded-lg transition-colors flex items-center justify-center gap-2"
+                onClick={handleRestart}
+                aria-label="Restart conversation simulation"
+                className="w-full py-3 min-h-[44px] px-4 bg-white/5 hover:bg-white/10 border border-white/5 text-slate-300 font-bold uppercase text-xs tracking-wider rounded-lg transition-colors flex items-center justify-center gap-2 focus:ring-2 focus:ring-white/30 focus:outline-none"
             >
                 <RefreshCw size={14} />
                 Restart Simulation

@@ -50,6 +50,32 @@ export interface CopiedResponse {
   feedbackGiven: boolean;
 }
 
+// Error types for better error handling
+export interface APIError {
+  message: string;
+  code?: string;
+  retryable?: boolean;
+}
+
+// Constants
+export const TONE_LABELS = {
+  CASUAL: 'CASUAL',
+  BALANCED: 'BALANCED',
+  FORMAL: 'FORMAL'
+} as const;
+
+export const URGENCY_LEVELS = {
+  HIGH: 'high',
+  MEDIUM: 'medium',
+  LOW: 'low'
+} as const;
+
+export const RISK_LEVELS = {
+  HIGH: 'high',
+  MEDIUM: 'medium',
+  LOW: 'low'
+} as const;
+
 export interface AppState {
   history: string;
   scenario: ScenarioType;

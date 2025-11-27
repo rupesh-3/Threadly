@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { FeedbackEntry } from '../types';
 import { BarChart2, TrendingUp, MessageSquare } from 'lucide-react';
@@ -13,30 +13,34 @@ const SCENARIO_BAR_COLOR = '#6366f1'; // Indigo
 
 const Dashboard: React.FC<DashboardProps> = ({ feedbackHistory, totalAnalyses }) => {
   
-  const outcomeCounts = feedbackHistory.reduce((acc, curr) => {
-    acc[curr.outcome] = (acc[curr.outcome] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+  const { pieData, barData, successRate } = useMemo(() => {
+    const outcomeCounts = feedbackHistory.reduce((acc, curr) => {
+      acc[curr.outcome] = (acc[curr.outcome] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
 
-  const pieData = [
-    { name: 'Great', value: outcomeCounts['great'] || 0 },
-    { name: 'Okay', value: outcomeCounts['okay'] || 0 },
-    { name: 'Not Well', value: outcomeCounts['bad'] || 0 },
-  ].filter(d => d.value > 0);
+    const pieData = [
+      { name: 'Great', value: outcomeCounts['great'] || 0 },
+      { name: 'Okay', value: outcomeCounts['okay'] || 0 },
+      { name: 'Not Well', value: outcomeCounts['bad'] || 0 },
+    ].filter(d => d.value > 0);
 
-  const scenarioCounts = feedbackHistory.reduce((acc, curr) => {
-    acc[curr.scenario] = (acc[curr.scenario] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+    const scenarioCounts = feedbackHistory.reduce((acc, curr) => {
+      acc[curr.scenario] = (acc[curr.scenario] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
 
-  const barData = Object.keys(scenarioCounts).map(key => ({
-    name: key,
-    count: scenarioCounts[key]
-  }));
+    const barData = Object.keys(scenarioCounts).map(key => ({
+      name: key,
+      count: scenarioCounts[key]
+    }));
 
-  const successRate = feedbackHistory.length > 0 
-    ? Math.round(((outcomeCounts['great'] || 0) / feedbackHistory.length) * 100) 
-    : 0;
+    const successRate = feedbackHistory.length > 0 
+      ? Math.round(((outcomeCounts['great'] || 0) / feedbackHistory.length) * 100) 
+      : 0;
+
+    return { pieData, barData, successRate };
+  }, [feedbackHistory]);
 
   return (
     <div className="space-y-6">
@@ -90,7 +94,11 @@ const Dashboard: React.FC<DashboardProps> = ({ feedbackHistory, totalAnalyses })
                 </PieChart>
                 </ResponsiveContainer>
             ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No feedback data yet</div>
+                <div className="h-full flex flex-col items-center justify-center text-slate-600 text-sm gap-2">
+                  <MessageSquare size={32} className="opacity-30" />
+                  <p>No feedback data yet</p>
+                  <p className="text-xs text-slate-700">Start analyzing conversations!</p>
+                </div>
             )}
           </div>
         </div>
@@ -113,7 +121,11 @@ const Dashboard: React.FC<DashboardProps> = ({ feedbackHistory, totalAnalyses })
                 </BarChart>
                 </ResponsiveContainer>
                 ) : (
-                <div className="h-full flex items-center justify-center text-slate-600 text-sm">No data yet</div>
+                <div className="h-full flex flex-col items-center justify-center text-slate-600 text-sm gap-2">
+                  <BarChart2 size={32} className="opacity-30" />
+                  <p>No scenario data yet</p>
+                  <p className="text-xs text-slate-700">Try different scenarios!</p>
+                </div>
             )}
           </div>
         </div>
@@ -122,4 +134,4 @@ const Dashboard: React.FC<DashboardProps> = ({ feedbackHistory, totalAnalyses })
   );
 };
 
-export default Dashboard;
+export default React.memo(Dashboard);

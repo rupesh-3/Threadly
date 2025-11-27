@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Briefcase, Heart, Users, AlertOctagon, DollarSign, MessageSquare, Sparkles, Clock, Settings, LayoutDashboard, Home, LogOut, Zap, MessageCircle, Command, ChevronRight } from 'lucide-react';
 import { generateThreadlyAnalysis } from './services/geminiService';
 import { ThreadlyResponse, ScenarioType, FeedbackEntry, CopiedResponse } from './types';
@@ -7,6 +7,11 @@ import SimulatorModal from './components/SimulatorModal';
 import Dashboard from './components/Dashboard';
 
 // Constants
+const MAX_HISTORY_LENGTH = 5000;
+const MIN_HISTORY_LENGTH = 10;
+const DEBOUNCE_DELAY = 1000;
+const MAX_RETRIES = 2;
+
 const SCENARIOS: { id: ScenarioType; label: string; icon: React.ReactNode; desc: string; color: string }[] = [
   { id: 'Professional', label: 'Professional', icon: <Briefcase size={20} />, desc: 'Work & Networking', color: 'text-blue-400' },
   { id: 'Personal', label: 'Personal', icon: <Users size={20} />, desc: 'Friends & Social', color: 'text-emerald-400' },
@@ -31,6 +36,8 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ThreadlyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   const [isSimOpen, setIsSimOpen] = useState(false);
   const [selectedSimResponse, setSelectedSimResponse] = useState<any>(null);
@@ -62,6 +69,76 @@ const App: React.FC = () => {
     localStorage.setItem('threadly_copied', JSON.stringify(copiedResponses));
   }, [copiedResponses]);
 
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    const timer = setTimeout(() => setToastMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const validateInputs = useCallback((): string | null => {
+    const trimmedHistory = history.trim();
+    
+    if (!trimmedHistory) {
+      return "Please enter conversation history to analyze.";
+    }
+    
+    if (trimmedHistory.length < MIN_HISTORY_LENGTH) {
+      return `Message too short. Please enter at least ${MIN_HISTORY_LENGTH} characters.`;
+    }
+    
+    if (trimmedHistory.length > MAX_HISTORY_LENGTH) {
+      return `Message too long. Maximum ${MAX_HISTORY_LENGTH} characters allowed.`;
+    }
+    
+    if (!apiKey?.trim()) {
+      return "API key not configured. Please add your Gemini API key in Settings.";
+    }
+    
+    return null;
+  }, [history, apiKey]);
+
+  const handleAnalyzeWithRetry = useCallback(async (attemptNumber = 0): Promise<void> => {
+    const validationError = validateInputs();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    setIsAnalyzing(true);
+    setError(null);
+    setResult(null);
+    
+    try {
+      const data = await generateThreadlyAnalysis(history, scenario, tone, userContext, apiKey);
+      setResult(data);
+      setRetryCount(0);
+      showToast("Analysis complete!");
+    } catch (err) {
+      console.error('Analysis error:', err);
+      
+      const errorMsg = err instanceof Error ? err.message : "Analysis failed. Please try again.";
+      
+      // Retry logic for network errors
+      if (attemptNumber < MAX_RETRIES && errorMsg.includes('network')) {
+        setRetryCount(attemptNumber + 1);
+        showToast(`Retrying... (${attemptNumber + 1}/${MAX_RETRIES})`);
+        setTimeout(() => handleAnalyzeWithRetry(attemptNumber + 1), 2000);
+        return;
+      }
+      
+      setError(errorMsg);
+      setRetryCount(0);
+    } finally {
+      setLoading(false);
+      setIsAnalyzing(false);
+    }
+  }, [history, scenario, tone, userContext, apiKey, validateInputs, showToast]);
+
+  const handleAnalyze = useCallback(() => {
+    handleAnalyzeWithRetry();
+  }, [handleAnalyzeWithRetry]);
+
   // Scroll to results when they appear
   useEffect(() => {
     if (result && resultsRef.current) {
@@ -69,59 +146,62 @@ const App: React.FC = () => {
     }
   }, [result]);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 4000);
-  };
-
-  const handleAnalyze = async () => {
-    if (!history.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    
-    try {
-      const data = await generateThreadlyAnalysis(history, scenario, tone, userContext, apiKey);
-      setResult(data);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Connection interrupted. Check your inputs and try again.";
-      setError(errorMsg);
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCopy = (text: string, type: string) => {
-    showToast("Response copied to clipboard");
-    const newCopy: CopiedResponse = {
-      id: crypto.randomUUID(),
-      copiedAt: new Date().toISOString(),
-      responseText: text,
-      scenario,
-      tone,
-      feedbackGiven: false
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Ctrl+Enter or Cmd+Enter to analyze
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && activeView === 'home') {
+        e.preventDefault();
+        if (history.trim() && !loading) {
+          handleAnalyze();
+        }
+      }
+      // Escape to clear error
+      if (e.key === 'Escape' && error) {
+        setError(null);
+      }
     };
-    setCopiedResponses(prev => [newCopy, ...prev]);
-  };
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [history, loading, error, activeView, handleAnalyze]);
 
-  const handleSimulate = (response: any) => {
+  const handleCopy = useCallback((text: string, type: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast("Response copied to clipboard!");
+      const newCopy: CopiedResponse = {
+        id: crypto.randomUUID(),
+        copiedAt: new Date().toISOString(),
+        responseText: text,
+        scenario,
+        tone,
+        feedbackGiven: false
+      };
+      setCopiedResponses(prev => [newCopy, ...prev.slice(0, 49)]); // Keep last 50
+    }).catch(() => {
+      showToast("Failed to copy. Please try again.");
+    });
+  }, [scenario, tone, showToast]);
+
+  const handleSimulate = useCallback((response: any) => {
     setSelectedSimResponse(response);
     setIsSimOpen(true);
-  };
+  }, []);
 
-  const addMockFeedback = () => {
-    const newFeedback: FeedbackEntry = {
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      scenario: SCENARIOS[Math.floor(Math.random() * SCENARIOS.length)].id,
-      tone: Math.floor(Math.random() * 100),
-      responseType: 'recommended',
-      outcome: Math.random() > 0.3 ? 'great' : Math.random() > 0.5 ? 'okay' : 'bad'
-    };
-    setFeedbackHistory(prev => [...prev, newFeedback]);
-    showToast("Mock data injected");
-  };
+  // Development only: Mock data generator
+  const addMockFeedback = useCallback(() => {
+    if (process.env.NODE_ENV !== 'production') {
+      const newFeedback: FeedbackEntry = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        scenario: SCENARIOS[Math.floor(Math.random() * SCENARIOS.length)].id,
+        tone: Math.floor(Math.random() * 100),
+        responseType: 'recommended',
+        outcome: Math.random() > 0.3 ? 'great' : Math.random() > 0.5 ? 'okay' : 'bad'
+      };
+      setFeedbackHistory(prev => [...prev, newFeedback]);
+      showToast("Mock data added");
+    }
+  }, [showToast]);
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -186,7 +266,7 @@ const App: React.FC = () => {
                 {/* Input Area */}
                 <div className="space-y-3 px-4 pt-4 sm:px-0 sm:pt-0">
                   <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                    <label htmlFor="conversation-history" className="text-xs font-bold uppercase tracking-widest text-slate-500 flex items-center gap-2">
                       <MessageSquare size={14} className="text-white" />
                       Source History
                     </label>
@@ -194,14 +274,20 @@ const App: React.FC = () => {
                   </div>
                   <div className="relative">
                     <textarea
+                      id="conversation-history"
                       value={history}
                       onChange={(e) => setHistory(e.target.value)}
                       placeholder="Paste conversation history here..."
-                      className="w-full h-48 p-4 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-0 transition-all resize-none text-base font-mono leading-relaxed scrollbar-hide"
+                      aria-label="Conversation history input"
+                      aria-describedby="char-count"
+                      maxLength={MAX_HISTORY_LENGTH}
+                      className="w-full h-48 p-4 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-2 focus:ring-white/20 focus:outline-none transition-all resize-none text-base font-mono leading-relaxed scrollbar-hide"
                     />
-                    <div className="absolute bottom-3 right-3 pointer-events-none">
-                      <div className="text-[10px] font-mono text-slate-600">
-                         {history.length} CHARS
+                    <div id="char-count" className="absolute bottom-3 right-3 pointer-events-none">
+                      <div className={`text-[10px] font-mono transition-colors ${
+                        history.length > MAX_HISTORY_LENGTH * 0.9 ? 'text-amber-400' : 'text-slate-600'
+                      }`}>
+                         {history.length} / {MAX_HISTORY_LENGTH}
                       </div>
                     </div>
                   </div>
@@ -218,7 +304,9 @@ const App: React.FC = () => {
                       <button
                         key={s.id}
                         onClick={() => setScenario(s.id)}
-                        className={`group p-3 rounded-lg border text-left transition-all duration-200 h-full flex flex-col justify-between gap-2 ${
+                        aria-label={`Select ${s.label} scenario: ${s.desc}`}
+                        aria-pressed={scenario === s.id}
+                        className={`group p-3 rounded-lg border text-left transition-all duration-200 h-full flex flex-col justify-between gap-2 focus:ring-2 focus:ring-white/30 focus:outline-none ${
                           scenario === s.id 
                           ? 'border-white bg-white text-black' 
                           : 'border-white/5 bg-[#020617] text-slate-500 hover:border-white/20 hover:text-slate-300'
@@ -263,13 +351,16 @@ const App: React.FC = () => {
 
                   {/* Additional Context */}
                    <div className="space-y-2">
-                      <label className="text-xs font-bold uppercase tracking-widest text-slate-500">Context Override <span className="text-slate-700 font-normal">(Optional)</span></label>
-                      <input 
+                      <label htmlFor="user-context" className="text-xs font-bold uppercase tracking-widest text-slate-500">Context Override <span className="text-slate-700 font-normal">(Optional)</span></label>
+                      <input
+                        id="user-context"
                         type="text"
                         value={userContext}
                         onChange={(e) => setUserContext(e.target.value)}
                         placeholder="Ex: 'My boss', 'First date'..."
-                        className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-0 outline-none transition-all font-mono text-sm"
+                        aria-label="Additional context (optional)"
+                        maxLength={200}
+                        className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-2 focus:ring-white/20 focus:outline-none transition-all font-mono text-sm"
                       />
                    </div>
                 </div>
@@ -278,8 +369,10 @@ const App: React.FC = () => {
                 <div className="px-4 sm:px-0 pb-4 sm:pb-0">
                   <button
                     onClick={handleAnalyze}
-                    disabled={!history.trim() || loading}
-                    className={`w-full py-4 rounded-xl font-display font-bold text-lg tracking-wide transition-all duration-200 flex items-center justify-center gap-3 ${
+                    disabled={!history.trim() || loading || isAnalyzing}
+                    aria-label="Analyze conversation and generate responses"
+                    aria-busy={loading}
+                    className={`w-full py-4 rounded-xl font-display font-bold text-lg tracking-wide transition-all duration-200 flex items-center justify-center gap-3 focus:ring-4 focus:ring-white/30 focus:outline-none ${
                       !history.trim() || loading
                       ? 'bg-slate-800 text-slate-600 cursor-not-allowed' 
                       : 'bg-white text-black hover:bg-slate-200'
@@ -303,9 +396,15 @@ const App: React.FC = () => {
 
             {/* Error State */}
             {error && (
-              <div className="p-4 bg-red-950/30 border border-red-900/50 text-red-400 rounded-lg flex items-center gap-3 text-sm font-mono">
-                <AlertOctagon size={16} />
-                {error}
+              <div role="alert" className="p-4 bg-red-950/30 border border-red-900/50 text-red-400 rounded-lg flex items-start gap-3 text-sm font-mono animate-slide-up">
+                <AlertOctagon size={16} className="flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-bold mb-1">Analysis Failed</p>
+                  <p>{error}</p>
+                  {retryCount > 0 && (
+                    <p className="text-xs mt-2 text-red-300">Retry attempt {retryCount} of {MAX_RETRIES}...</p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -384,19 +483,23 @@ const App: React.FC = () => {
               
               <div className="space-y-4">
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-500 block mb-2">Gemini API Key</label>
+                  <label htmlFor="api-key-input" className="text-xs font-bold uppercase tracking-widest text-slate-500 block mb-2">Gemini API Key</label>
                   <div className="relative">
                     <input
+                      id="api-key-input"
                       type={showApiKey ? 'text' : 'password'}
                       value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
+                      onChange={(e) => setApiKey(e.target.value.trim())}
                       placeholder="Paste your Gemini API key here..."
-                      className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-0 outline-none transition-all font-mono text-sm pr-12"
+                      aria-label="Gemini API key input"
+                      autoComplete="off"
+                      className="w-full px-4 py-3 rounded-xl bg-[#020617] border border-white/10 text-white placeholder:text-slate-700 focus:border-white/30 focus:ring-2 focus:ring-white/20 focus:outline-none transition-all font-mono text-sm pr-12"
                     />
                     <button
                       onClick={() => setShowApiKey(!showApiKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
-                      title={showApiKey ? 'Hide' : 'Show'}
+                      aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors p-1 rounded focus:ring-2 focus:ring-white/30 focus:outline-none"
                     >
                       {showApiKey ? '👁️' : '👁️‍🗨️'}
                     </button>
@@ -407,20 +510,28 @@ const App: React.FC = () => {
                       href="https://aistudio.google.com/app/apikey" 
                       target="_blank" 
                       rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 underline"
+                      className="text-blue-400 hover:text-blue-300 underline focus:ring-2 focus:ring-blue-400/30 focus:outline-none rounded"
                     >
                       Google AI Studio
                     </a>
+                  </p>
+                  <p className="text-xs text-slate-600 mt-1">
+                    💡 Tip: Press Ctrl+Enter to analyze conversations quickly
                   </p>
                 </div>
 
                 <button
                   onClick={() => {
+                    if (apiKey.trim().length < 20) {
+                      showToast('Invalid API key format');
+                      return;
+                    }
                     localStorage.setItem('threadly_api_key', apiKey);
                     showToast('API key saved successfully!');
                   }}
-                  disabled={!apiKey.trim()}
-                  className={`w-full py-3 rounded-xl font-display font-bold tracking-wide transition-all duration-200 uppercase text-sm ${
+                  disabled={!apiKey.trim() || apiKey.trim().length < 20}
+                  aria-label="Save API key to local storage"
+                  className={`w-full py-3 rounded-xl font-display font-bold tracking-wide transition-all duration-200 uppercase text-sm focus:ring-4 focus:ring-emerald-600/30 focus:outline-none ${
                     apiKey.trim()
                       ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
                       : 'bg-slate-800 text-slate-600 cursor-not-allowed'
@@ -459,19 +570,23 @@ const App: React.FC = () => {
                 <div className="pt-4">
                   <button 
                     onClick={() => {
-                      if(window.confirm("Confirm deletion of all local data?")) {
+                      if(window.confirm("⚠️ This will permanently delete all local data including feedback history and copied responses. This action cannot be undone.\n\nAre you sure you want to continue?")) {
                         setFeedbackHistory([]);
                         setCopiedResponses([]);
                         localStorage.removeItem('threadly_feedback');
                         localStorage.removeItem('threadly_copied');
-                        showToast("Database purged.");
+                        showToast("All local data cleared successfully");
                       }
                     }}
-                    className="flex items-center justify-center gap-2 text-red-400 hover:bg-red-950/20 hover:text-red-300 px-6 py-3 rounded-lg transition-colors w-full border border-red-900/30 text-sm font-bold uppercase tracking-wider"
+                    aria-label="Purge all local data"
+                    className="flex items-center justify-center gap-2 text-red-400 hover:bg-red-950/20 hover:text-red-300 px-6 py-3 rounded-lg transition-colors w-full border border-red-900/30 text-sm font-bold uppercase tracking-wider focus:ring-4 focus:ring-red-600/30 focus:outline-none"
                   >
                     <LogOut size={16} />
                     Purge Local Data
                   </button>
+                  <p className="text-xs text-slate-600 mt-2 text-center">
+                    ⚠️ This action is permanent and cannot be undone
+                  </p>
                 </div>
               </div>
             </div>

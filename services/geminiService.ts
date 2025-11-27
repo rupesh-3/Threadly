@@ -3,6 +3,21 @@ import { ThreadlyResponse, ScenarioType } from "../types";
 
 const SYSTEM_INSTRUCTION = `You are Threadly, an expert communication strategist and conversation coach. Your goal is to analyze messaging contexts and generate strategic response options. You do not just generate text; you provide coaching, risk assessment, and predicted outcomes.`;
 
+const API_TIMEOUT = 30000; // 30 seconds
+const MODEL_NAME = 'gemini-2.0-flash-exp';
+
+// Validate API response structure
+const validateResponse = (data: any): data is ThreadlyResponse => {
+  return (
+    data &&
+    typeof data === 'object' &&
+    data.analysis &&
+    Array.isArray(data.responses) &&
+    data.responses.length === 3 &&
+    data.simulator
+  );
+};
+
 export const generateThreadlyAnalysis = async (
   history: string,
   scenario: ScenarioType,
@@ -16,6 +31,15 @@ export const generateThreadlyAnalysis = async (
 
   if (!finalApiKey || finalApiKey === 'PLACEHOLDER_API_KEY') {
     throw new Error("API Key is missing. Please configure your Gemini API key in Settings.");
+  }
+
+  // Input validation
+  if (!history || history.trim().length < 10) {
+    throw new Error("Conversation history is too short. Please provide more context.");
+  }
+
+  if (history.trim().length > 5000) {
+    throw new Error("Conversation history is too long. Please keep it under 5000 characters.");
   }
 
   const ai = new GoogleGenAI({ apiKey: finalApiKey });
@@ -70,21 +94,65 @@ Return ONLY a JSON object with this exact structure:
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-      }
+    // Create timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout. Please try again.')), API_TIMEOUT);
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No response from AI");
+    // Race between API call and timeout
+    const response = await Promise.race([
+      ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: prompt,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+        }
+      }),
+      timeoutPromise
+    ]);
 
-    return JSON.parse(text) as ThreadlyResponse;
-  } catch (error) {
+    const text = response.text;
+    if (!text) {
+      throw new Error("Empty response from AI. Please try again.");
+    }
+
+    let parsedData: ThreadlyResponse;
+    try {
+      parsedData = JSON.parse(text) as ThreadlyResponse;
+    } catch (parseError) {
+      console.error('JSON Parse Error:', parseError);
+      throw new Error("Invalid response format from AI. Please try again.");
+    }
+
+    // Validate response structure
+    if (!validateResponse(parsedData)) {
+      console.error('Invalid response structure:', parsedData);
+      throw new Error("Incomplete response from AI. Please try again.");
+    }
+
+    return parsedData;
+  } catch (error: any) {
     console.error("Gemini API Error:", error);
-    throw error;
+    
+    // Categorize errors for better user feedback
+    if (error.message?.includes('timeout')) {
+      throw new Error('Request timed out. Check your connection and try again.');
+    }
+    
+    if (error.message?.includes('API key')) {
+      throw new Error('Invalid API key. Please check your Settings.');
+    }
+    
+    if (error.message?.includes('quota') || error.message?.includes('rate limit')) {
+      throw new Error('API quota exceeded. Please try again later.');
+    }
+    
+    if (error.message?.includes('network') || error.code === 'ENOTFOUND') {
+      throw new Error('Network error. Check your internet connection.');
+    }
+    
+    // Generic fallback
+    throw new Error(error.message || 'Analysis failed. Please try again.');
   }
 };

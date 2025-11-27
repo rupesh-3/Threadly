@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Copy, Check, AlertTriangle, ArrowRight, Shield, Zap, Target, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { StrategyResponse } from '../types';
 
@@ -12,12 +12,15 @@ const ResponseCard: React.FC<ResponseCardProps> = ({ response, onCopy, onSimulat
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(response.replyText);
-    onCopy(response.replyText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(response.replyText).then(() => {
+      onCopy(response.replyText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      alert('Failed to copy. Please try manually.');
+    });
+  }, [response.replyText, onCopy]);
 
   const getStrategyStyle = (type: string) => {
     switch (type) {
@@ -86,10 +89,10 @@ const ResponseCard: React.FC<ResponseCardProps> = ({ response, onCopy, onSimulat
           </p>
           <button 
             onClick={handleCopy}
-            className="absolute top-2 right-2 p-2 bg-white text-black rounded hover:bg-slate-200 transition-all opacity-0 group-hover/text:opacity-100"
-            title="Copy to clipboard"
+            aria-label={copied ? 'Copied to clipboard' : 'Copy response to clipboard'}
+            className="absolute top-2 right-2 p-2.5 min-w-[44px] min-h-[44px] bg-white text-black rounded hover:bg-slate-200 transition-all opacity-0 group-hover/text:opacity-100 focus:opacity-100 focus:ring-2 focus:ring-white/30 focus:outline-none"
           >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {copied ? <Check size={16} /> : <Copy size={16} />}
           </button>
         </div>
       </div>
@@ -136,7 +139,9 @@ const ResponseCard: React.FC<ResponseCardProps> = ({ response, onCopy, onSimulat
       <div className="p-6 mt-auto flex gap-3 border-t border-white/5">
         <button 
           onClick={() => setExpanded(!expanded)}
-          className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-white hover:bg-white/5 rounded transition-colors flex items-center gap-2"
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Hide additional details' : 'Show additional details'}
+          className="px-4 py-3 min-h-[44px] text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-white hover:bg-white/5 rounded transition-colors flex items-center gap-2 focus:ring-2 focus:ring-white/30 focus:outline-none"
         >
           {expanded ? (
               <>Hide <ChevronUp size={14}/></>
@@ -146,7 +151,8 @@ const ResponseCard: React.FC<ResponseCardProps> = ({ response, onCopy, onSimulat
         </button>
         <button 
           onClick={onSimulate}
-          className="flex-1 py-2 text-xs font-bold uppercase tracking-wider text-black bg-white hover:bg-slate-200 rounded transition-all flex items-center justify-center gap-2"
+          aria-label="Open conversation simulator"
+          className="flex-1 py-3 min-h-[44px] text-xs font-bold uppercase tracking-wider text-black bg-white hover:bg-slate-200 rounded transition-all flex items-center justify-center gap-2 focus:ring-2 focus:ring-white/30 focus:outline-none"
         >
           Simulate
           <ArrowRight size={14} />
