@@ -1,5 +1,7 @@
 export type ScenarioType = 'Professional' | 'Personal' | 'Romantic' | 'Family' | 'Conflict' | 'Sales';
 
+export type AIProvider = 'gemini' | 'huggingface';
+
 export interface AnalysisResult {
   sentiment: string;
   dynamics: string;
@@ -84,4 +86,18 @@ export interface AppState {
   scenario: ScenarioType;
   tone: number;
   userContext: string;
+}
+
+// User & Authentication Types
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  lastLoginAt: string;
+}
+
+export interface AuthState {
+  user: User | null;
+  isAuthenticated: boolean;
 }

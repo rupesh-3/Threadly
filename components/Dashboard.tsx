@@ -48,7 +48,7 @@ const Dashboard: React.FC<DashboardProps> = ({ feedbackHistory, totalAnalyses })
       {/* Stats Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[
-            { icon: MessageSquare, label: 'Analyses Run', value: totalAnalyses, color: 'text-blue-400' },
+            { icon: MessageSquare, label: 'Analyses Today', value: totalAnalyses, color: 'text-blue-400' },
             { icon: TrendingUp, label: 'Success Rate', value: `${successRate}%`, color: 'text-emerald-400' },
             { icon: BarChart2, label: 'Total Feedback', value: feedbackHistory.length, color: 'text-violet-400' }
         ].map((stat, i) => (

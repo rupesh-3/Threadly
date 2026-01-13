@@ -13,13 +13,10 @@ const ResponseCard: React.FC<ResponseCardProps> = ({ response, onCopy, onSimulat
   const [expanded, setExpanded] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(response.replyText).then(() => {
-      onCopy(response.replyText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {
-      alert('Failed to copy. Please try manually.');
-    });
+    // Delegate clipboard logic to parent to avoid double writes and permission errors
+    onCopy(response.replyText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [response.replyText, onCopy]);
 
   const getStrategyStyle = (type: string) => {

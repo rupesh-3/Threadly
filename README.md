@@ -10,7 +10,7 @@
 
 ## Overview
 
-Threadly provides a production-ready framework for communication analysis powered by multiple AI providers (Google Gemini, OpenAI, Anthropic Claude, OpenRouter). The application delivers:
+Threadly provides a production-ready framework for communication analysis powered by Google Gemini and Hugging Face AI providers. The application delivers:
 
 - **Sentiment & Dynamics Analysis**: Real-time conversation context evaluation
 - **Multi-Strategy Response Generation**: Three contextually-aware approaches per scenario
@@ -29,11 +29,9 @@ Threadly provides a production-ready framework for communication analysis powere
 - **Conflict**: Dispute resolution, tension management
 - **Sales**: Pitch presentations, deal negotiations
 
-### 🔄 Multi-Provider API Support
-- **Google Gemini**: Latest models (2.0 Flash, 1.5 Pro/Flash)
-- **OpenAI**: GPT-4 Turbo, GPT-4, GPT-3.5-Turbo
-- **Anthropic Claude**: Claude 3 (Opus, Sonnet, Haiku)
-- **OpenRouter**: 200+ model access via unified interface
+### 🔄 AI Provider Support
+- **Google Gemini**: Latest models (2.0 Flash, 1.5 Pro/Flash) - Free tier available
+- **Hugging Face**: Access to 200+ open-source models via Router API
 
 ### 📊 Advanced Features
 - **5-Minute Response Caching**: Reduces API quota consumption by 30-50%
@@ -44,11 +42,11 @@ Threadly provides a production-ready framework for communication analysis powere
 - **PWA Integration**: Offline-capable with service worker caching
 
 ### 🔐 Privacy & Security
-- Client-side only data storage (localStorage)
-- No cloud backend or external logging
-- Zero conversation content retention
+- Client-side data storage (localStorage)
+- Optional Supabase integration for analytics (configured via environment variables)
 - User-controlled data purging
 - CORS-compliant API calls
+- All tracking is non-blocking and optional
 
 ## Tech Stack
 
@@ -76,9 +74,11 @@ src/
 │   ├── ErrorBoundary.tsx           # Error handling wrapper
 │   └── FeedbackModal.tsx           # Feedback collection
 ├── services/
-│   ├── multiProviderService.ts     # Unified AI provider interface
-│   ├── geminiService.ts            # Legacy Gemini integration
-│   └── [provider-specific]         # Provider implementations
+│   ├── multiProviderService.ts     # Unified AI provider interface (Gemini & HuggingFace)
+│   ├── apiTestService.ts           # API key validation
+│   ├── responseNormalizer.ts        # Response validation & normalization
+│   ├── supabaseClient.ts            # Supabase client configuration
+│   └── supabaseService.ts           # Database tracking service (prompts, feedback, logins)
 ├── types.ts                         # TypeScript interfaces
 ├── index.tsx                        # React entry point
 ├── index.css                        # Tailwind directives
@@ -90,7 +90,7 @@ src/
 ### Prerequisites
 - **Node.js**: v18 or higher
 - **npm**: v9 or higher
-- **API Key**: At least one from [Gemini](https://aistudio.google.com), [OpenAI](https://platform.openai.com), [Claude](https://console.anthropic.com), or [OpenRouter](https://openrouter.ai)
+- **API Key**: At least one from [Gemini](https://aistudio.google.com) or [Hugging Face](https://huggingface.co/settings/tokens)
 
 ### Quick Start
 
@@ -110,20 +110,33 @@ Navigate to `http://localhost:3000` (or assigned port) in your browser.
 
 ### Configuration
 
-#### API Key Setup
+#### Supabase Setup (Optional - for Monetization Tracking)
+
+To track user activity for monetization analytics:
+
+1. **Set up Supabase database** - Follow the detailed guide in `SUPABASE_SETUP.md`
+2. **Add environment variables** to `.env.local`:
+   ```env
+   VITE_SUPABASE_URL=https://your-project.supabase.co
+   VITE_SUPABASE_ANON_KEY=your-anon-key-here
+   ```
+3. **Restart dev server** - The app will automatically start tracking when Supabase is configured
+
+**Note**: Supabase tracking is completely optional and non-blocking. The app works perfectly without it.
+
+#### API Key Setup (Multi‑Provider)
 
 Navigate to **Settings** in the application:
 
-1. **Select Provider**: Choose from Gemini, OpenAI, Claude, or OpenRouter
-2. **Paste API Key**: Provider-specific key from your console
-3. **Save**: Stored securely in browser localStorage
+1. **Select Provider**: Choose from Gemini or Hugging Face
+2. **Paste API Key**: Use the provider‑specific key from your console
+3. **Save**: The key is stored securely in browser `localStorage` and never sent anywhere except directly to the chosen provider
 
-Keys are stored per-provider:
+Keys are stored per provider:
+
 ```javascript
-localStorage.getItem('threadly_api_key_gemini')
-localStorage.getItem('threadly_api_key_openai')
-localStorage.getItem('threadly_api_key_claude')
-localStorage.getItem('threadly_api_key_openrouter')
+localStorage.getItem('threadly_api_key_gemini');
+localStorage.getItem('threadly_api_key_huggingface');
 ```
 
 ## Development
@@ -166,9 +179,16 @@ npm run test:coverage
 Create `.env.local` for development overrides:
 
 ```env
+# API Configuration
 VITE_API_TIMEOUT=30000
 VITE_CACHE_TTL=300000
+
+# Supabase Configuration (for monetization tracking)
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
 ```
+
+**Note**: See `SUPABASE_SETUP.md` for detailed Supabase database setup instructions.
 
 ## API Integration
 
@@ -178,7 +198,7 @@ The application implements a unified provider interface:
 
 ```typescript
 interface AIProvider {
-  provider: 'gemini' | 'openai' | 'claude' | 'openrouter';
+  provider: 'gemini' | 'huggingface';
   apiKey: string;
   model?: string;
 }
@@ -264,8 +284,9 @@ npm run test:coverage
 
 | Issue | Resolution |
 |-------|-----------|
-| **API Key Invalid** | Verify key in Settings, ensure correct provider selected |
-| **Quota Exceeded** | Switch provider or wait for rate limit reset; enable mock mode |
+| **API Key Invalid** | Verify key in **Settings**, ensure the correct provider is selected, and that the key is active in the provider console. |
+| **Quota / Credits Exceeded** | Switch to another configured provider (Gemini ↔ HuggingFace), or wait for the quota reset / add credits in the provider dashboard. Threadly already rate‑limits requests (2s cooldown) and caches responses (5‑minute TTL) to reduce usage. |
+| **Invalid response format from AI** | Very rarely, a provider may return malformed JSON. Re‑run the analysis once; if it persists, try another provider. The app normalizes structured JSON responses across providers, but transient upstream issues can still occur. |
 | **Port Already In Use** | Server auto-selects next available port (3001, 3002, etc.) |
 | **Build Failures** | Clear `node_modules/` and `package-lock.json`, reinstall |
 | **PWA Update Loop** | Disable in dev: Edit `pwa.ts` to skip on localhost |

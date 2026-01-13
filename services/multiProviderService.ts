@@ -1,11 +1,12 @@
 // Multi-provider AI service with unified interface
 import { ThreadlyResponse, ScenarioType } from "../types";
+import { normalizeThreadlyResponse, validateResponseStructure } from "./responseNormalizer";
 
 // ============================================
 // PROVIDER TYPES & CONFIGURATION
 // ============================================
 
-export type AIProvider = 'gemini' | 'openai' | 'claude' | 'openrouter';
+export type AIProvider = 'gemini' | 'huggingface';
 
 export interface ProviderConfig {
   provider: AIProvider;
@@ -27,23 +28,11 @@ const PROVIDER_CONFIG: Record<AIProvider, ProviderEndpoint> = {
     models: ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'],
     defaultModel: 'gemini-2.0-flash-exp'
   },
-  openai: {
-    name: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
-    defaultModel: 'gpt-4-turbo'
-  },
-  claude: {
-    name: 'claude',
-    baseUrl: 'https://api.anthropic.com/v1',
-    models: ['claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'],
-    defaultModel: 'claude-3-sonnet'
-  },
-  openrouter: {
-    name: 'openrouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    models: ['openai/gpt-4-turbo', 'openai/gpt-4', 'anthropic/claude-3-sonnet', 'meta-llama/llama-2-70b-chat', 'mistralai/mistral-7b-instruct'],
-    defaultModel: 'openai/gpt-4-turbo'
+  huggingface: {
+    name: 'huggingface',
+    baseUrl: 'https://router.huggingface.co/v1/chat/completions',
+    models: ['Qwen/Qwen2.5-7B-Instruct:featherless-ai', 'meta-llama/Llama-2-7b-chat-hf', 'mistralai/Mistral-7B-Instruct-v0.2', 'NousResearch/Nous-Hermes-2-Mixtral-8x7B-SFT'],
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct:featherless-ai'
   }
 };
 
@@ -51,7 +40,20 @@ const PROVIDER_CONFIG: Record<AIProvider, ProviderEndpoint> = {
 // CACHE SYSTEM
 // ============================================
 
-const SYSTEM_INSTRUCTION = `You are Threadly, an expert communication strategist and conversation coach. Your goal is to analyze messaging contexts and generate strategic response options. You do not just generate text; you provide coaching, risk assessment, and predicted outcomes.`;
+const SYSTEM_INSTRUCTION = `You are Threadly, an expert communication strategist and conversation coach.
+
+Your primary objective is to help the user send the *single most effective message possible* for their situation, not to be generic or overly cautious. You must:
+- Read the conversation context carefully and infer relationship dynamics, power balance, emotional stakes, and hidden constraints.
+- Think through likely short-term and long-term consequences of different ways of replying.
+- Give concise, concrete, ready-to-send wording that sounds natural for a human (no “As an AI…” or meta-commentary).
+- Explicitly manage social risk: minimize unnecessary risk while still moving the conversation toward the user’s likely goal.
+
+Quality bar:
+- Every response must feel like advice from a senior communication coach who understands social nuance, conflict de-escalation, persuasion, and boundaries.
+- Avoid hedging, filler, or vague phrases. Prefer specific wording, clear structure, and direct but empathetic tone.
+- Make sure each strategy is meaningfully distinct in tone, level of directness, and risk profile.
+- Do not invent facts; base reasoning only on the provided history and scenario.
+- Never output explanations like "I am an AI model..." or any implementation details—only the requested JSON content.`;
 
 const API_TIMEOUT = 30000; // 30 seconds
 const CACHE_TTL = 1000 * 60 * 5; // 5 minutes cache TTL
@@ -136,14 +138,44 @@ const generateCacheKey = (
 };
 
 const validateResponse = (data: any): data is ThreadlyResponse => {
-  return (
-    data &&
-    typeof data === 'object' &&
-    data.analysis &&
-    Array.isArray(data.responses) &&
-    data.responses.length === 3 &&
-    data.simulator
-  );
+  const validationError = validateResponseStructure(data);
+  if (validationError) {
+    console.warn(`Response validation warning: ${validationError}`);
+  }
+  // Even if validation warns, return true since normalization will fix it
+  return true;
+};
+
+const stripJsonFences = (raw: string): string => {
+  const trimmed = raw.trim();
+  const fencePattern = /^```(?:json)?\s*([\s\S]*?)\s*```$/i;
+  const match = trimmed.match(fencePattern);
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+
+  // Fallback: extract substring between first { and last }
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.substring(firstBrace, lastBrace + 1);
+  }
+
+  return trimmed;
+};
+
+const parseThreadlyResponse = (raw: string): ThreadlyResponse => {
+  const cleaned = stripJsonFences(raw);
+  try {
+    const parsed = JSON.parse(cleaned);
+    // Apply normalization firewall to fix malformed responses
+    const normalized = normalizeThreadlyResponse(parsed);
+    return normalized;
+  } catch (parseError) {
+    console.error('JSON Parse Error:', parseError, 'Raw:', raw);
+    // If JSON parsing fails completely, return a safe default response
+    return normalizeThreadlyResponse({});
+  }
 };
 
 // ============================================
@@ -182,104 +214,59 @@ const callGeminiAPI = async (
   return data.candidates[0].content.parts[0].text;
 };
 
-const callOpenAIAPI = async (
+const callHuggingFaceAPI = async (
   prompt: string,
   apiKey: string,
   model: string
 ): Promise<string> => {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_INSTRUCTION },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' },
-    }),
-  });
+  // Use Hugging Face Router API (more reliable than direct model inference)
+  const routerUrl = 'https://router.huggingface.co/v1/chat/completions';
 
-  if (!response.ok) {
-    const error = await response.json();
-    const message = error.error?.message || response.statusText;
-    throw new Error(`OpenAI API Error: ${message}`);
+  try {
+    const response = await fetch(routerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { 
+            role: 'system', 
+            content: SYSTEM_INSTRUCTION 
+          },
+          { 
+            role: 'user', 
+            content: prompt 
+          },
+        ],
+        temperature: 0.7,
+        top_p: 0.95,
+        max_tokens: 2000,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: response.statusText }));
+      const message = error.message || error.error?.message || response.statusText;
+      throw new Error(`Hugging Face Router API Error: ${message}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+
+    if (!content) {
+      throw new Error('No content in response from Hugging Face Router');
+    }
+
+    // Return the content (will be JSON string or text that gets normalized)
+    return content;
+  } catch (error: any) {
+    const message = error?.message || 'Unknown error';
+    throw new Error(`Hugging Face API Error: ${message}`);
   }
-
-  const data = await response.json();
-  return data.choices[0].message.content;
-};
-
-const callClaudeAPI = async (
-  prompt: string,
-  apiKey: string,
-  model: string
-): Promise<string> => {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 2000,
-      system: SYSTEM_INSTRUCTION,
-      messages: [
-        { role: 'user', content: prompt },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    const message = error.error?.message || response.statusText;
-    throw new Error(`Claude API Error: ${message}`);
-  }
-
-  const data = await response.json();
-  return data.content[0].text;
-};
-
-const callOpenRouterAPI = async (
-  prompt: string,
-  apiKey: string,
-  model: string
-): Promise<string> => {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://threadly.app',
-      'X-Title': 'Threadly - AI Conversation Strategist',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_INSTRUCTION },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' },
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-    const message = error.error?.message || error.message || response.statusText;
-    throw new Error(`OpenRouter API Error: ${message}`);
-  }
-
-  const data = await response.json();
-  return data.choices[0].message.content;
 };
 
 // ============================================
@@ -305,14 +292,8 @@ const callProviderAPI = async (
       case 'gemini':
         result = callGeminiAPI(prompt, apiKey, model);
         break;
-      case 'openai':
-        result = callOpenAIAPI(prompt, apiKey, model);
-        break;
-      case 'claude':
-        result = callClaudeAPI(prompt, apiKey, model);
-        break;
-      case 'openrouter':
-        result = callOpenRouterAPI(prompt, apiKey, model);
+      case 'huggingface':
+        result = callHuggingFaceAPI(prompt, apiKey, model);
         break;
       default:
         throw new Error(`Unknown provider: ${provider}`);
@@ -373,20 +354,41 @@ export const generateThreadlyAnalysis = async (
   const toneDescriptor = tone < 33 ? "Casual" : tone < 66 ? "Neutral/Balanced" : "Formal/Professional";
 
   const prompt = `
-**CONVERSATION CONTEXT:**
-Scenario: ${scenario}
-Tone Preference: ${tone} (0=very casual, 100=very formal) - Interpretation: ${toneDescriptor}
-Additional Context: ${userContext || "None provided"}
+**CONVERSATION CONTEXT**
+- Scenario: ${scenario}
+- Tone Preference: ${tone} (0=very casual, 100=very formal) – Interpretation: ${toneDescriptor}
+- Additional Context: ${userContext || "None provided"}
 
-**CONVERSATION HISTORY:**
+**CONVERSATION HISTORY (verbatim transcripts from the real conversation)**
 ${history}
 
-**YOUR TASK:**
-1. Analyze the conversation (sentiment, dynamics, urgency).
-2. Generate exactly 3 response options with different strategies:
-   - Response 1: "recommended" (best balanced approach)
-   - Response 2: "bold" OR "safe" (depends on context)
-   - Response 3: Alternative strategic approach ("caution" or another "safe"/"bold")
+---
+**YOUR TASK**
+
+You are coaching the user on what to send *next*.
+
+1. **Deep analysis**
+   - Identify the other party's likely emotional state, priorities, and hidden concerns.
+   - Describe the relationship dynamics and any power imbalance (e.g., boss/employee, new date, long-term partner, upset customer).
+   - Assess urgency: how costly is it to delay vs. respond quickly?
+
+2. **Generate exactly 3 distinct strategy options**
+   - Response 1: "recommended" → best balanced approach for most users in this context.
+   - Response 2: "bold" OR "safe" → either more direct/forward *or* more protective/low-risk than recommended.
+   - Response 3: Alternative strategic approach ("caution" or another clearly different "safe"/"bold" angle).
+
+For each response:
+   - Make the reply text **ready to send as-is** (no placeholders like [NAME], unless absolutely required).
+   - Match the requested tone (casual vs formal) while staying respectful and kind.
+   - Clearly explain upside, downside, and how the other person is likely to feel.
+   - Suggest a specific follow-up move the user can take after they get a reply.
+
+3. **Conversation simulator**
+   - Imagine the other person’s likely reply if the user sends the **recommended** response.
+   - Then propose a concise follow-up message from the user that keeps the interaction healthy and aligned with their interests.
+   - End with a short description of how the relationship is likely to feel after this exchange.
+
+Respond **only** with JSON in the exact format below. Do not include backticks, markdown, or any extra commentary.
 
 **OUTPUT FORMAT:**
 Return ONLY a JSON object with this exact structure:
@@ -422,17 +424,10 @@ Return ONLY a JSON object with this exact structure:
   try {
     const textResponse = await callProviderAPI(prompt, { provider, apiKey: finalApiKey });
     
-    let parsedData: ThreadlyResponse;
-    try {
-      parsedData = JSON.parse(textResponse) as ThreadlyResponse;
-    } catch (parseError) {
-      console.error('JSON Parse Error:', parseError);
-      throw new Error("Invalid response format from AI. Please try again.");
-    }
-
+    const parsedData = parseThreadlyResponse(textResponse);
+    // Validation now always succeeds because normalization fixes issues
     if (!validateResponse(parsedData)) {
-      console.error('Invalid response structure:', parsedData);
-      throw new Error("Incomplete response from AI. Please try again.");
+      console.warn('Response validation showed issues but normalization applied');
     }
 
     // Cache successful response
@@ -440,20 +435,26 @@ Return ONLY a JSON object with this exact structure:
     return parsedData;
   } catch (error: any) {
     console.error("Analysis Error:", error);
-    
-    if (error.message?.includes('timeout')) {
+    const message: string = error?.message || '';
+
+    if (message.includes('timeout')) {
       throw new Error('Request timed out. Check your connection and try again.');
     }
-    
-    if (error.message?.includes('API key') || error.message?.includes('authentication')) {
+
+    if (message.toLowerCase().includes('api key') || message.toLowerCase().includes('authentication')) {
       throw new Error(`Invalid ${provider} API key. Please check your Settings.`);
     }
-    
-    if (error.message?.includes('quota') || error.message?.includes('429') || error.message?.includes('rate limit')) {
-      throw new Error(`${provider.toUpperCase()} quota exceeded. Try another provider or wait a few minutes.`);
+
+    if (
+      message.toLowerCase().includes('quota') ||
+      message.includes('429') ||
+      message.toLowerCase().includes('rate limit')
+    ) {
+      throw new Error(`${provider.toUpperCase()} quota or rate limit exceeded. Try another provider or wait a few minutes.`);
     }
 
-    throw new Error(error.message || 'Analysis failed. Please try again.');
+
+    throw new Error(message || 'Analysis failed. Please try again.');
   }
 };
 

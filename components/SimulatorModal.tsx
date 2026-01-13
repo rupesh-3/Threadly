@@ -5,7 +5,7 @@ import { StrategyResponse, SimulatorData } from '../types';
 interface SimulatorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  selectedResponse: StrategyResponse;
+  selectedResponse: StrategyResponse | null;
   simulatorData: SimulatorData;
 }
 

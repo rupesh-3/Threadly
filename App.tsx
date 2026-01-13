@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Briefcase, Heart, Users, AlertOctagon, DollarSign, MessageSquare, Sparkles, Clock, Settings, LayoutDashboard, Home, LogOut, Zap, MessageCircle, Command, ChevronRight } from 'lucide-react';
+import { Briefcase, Heart, Users, AlertOctagon, DollarSign, MessageSquare, Sparkles, Clock, Settings, LayoutDashboard, Home, LogOut, Zap, MessageCircle, Command, ChevronRight, User } from 'lucide-react';
 import { generateThreadlyAnalysis, clearAnalysisCache, getAvailableProviders, type AIProvider } from './services/multiProviderService';
-import { ThreadlyResponse, ScenarioType, FeedbackEntry, CopiedResponse, StrategyResponse } from './types';
+import { testProviderAPI } from './services/apiTestService';
+import { ThreadlyResponse, ScenarioType, FeedbackEntry, CopiedResponse, StrategyResponse, User as UserType } from './types';
+import { copyToClipboard } from './utils/helpers';
+import { signUp, login, logout, getCurrentUser, updateUserProfile } from './utils/auth';
+import { savePromptToSupabase, saveFeedbackToSupabase, trackUserLogin } from './services/supabaseService';
 import ResponseCard from './components/ResponseCard';
 import SimulatorModal from './components/SimulatorModal';
 import Dashboard from './components/Dashboard';
 import FeedbackModal, { type FeedbackData } from './components/FeedbackModal';
+import LoginModal from './components/LoginModal';
+import SignUpModal from './components/SignUpModal';
+import Profile from './components/Profile';
 
 // Constants
 const MAX_HISTORY_LENGTH = 5000;
@@ -30,7 +37,10 @@ const Logo = () => (
 );
 
 const App: React.FC = () => {
-  const [activeView, setActiveView] = useState<'home' | 'dashboard' | 'settings'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'dashboard' | 'settings' | 'profile'>('home');
+  const [user, setUser] = useState<UserType | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showSignUpModal, setShowSignUpModal] = useState(false);
   const [history, setHistory] = useState('');
   const [scenario, setScenario] = useState<ScenarioType>('Professional');
   const [tone, setTone] = useState(50);
@@ -47,6 +57,8 @@ const App: React.FC = () => {
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackEntry[]>([]);
   const [copiedResponses, setCopiedResponses] = useState<CopiedResponse[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [totalAnalyses, setTotalAnalyses] = useState(0);
+  const [dailyAnalyses, setDailyAnalyses] = useState(0);
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>('gemini');
@@ -55,6 +67,10 @@ const App: React.FC = () => {
   // Feedback modal state
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackResponseText, setFeedbackResponseText] = useState('');
+  
+  // API Test state
+  const [testingApi, setTestingApi] = useState(false);
+  const [testResult, setTestResult] = useState<{ status: string; message: string } | null>(null);
 
   // Track last API request time to prevent quota exhaustion
   const lastApiRequestRef = useRef<number>(0);
@@ -75,6 +91,30 @@ const App: React.FC = () => {
     
     const savedApiKey = localStorage.getItem(`threadly_api_key_${savedProvider}`);
     if (savedApiKey) setApiKey(savedApiKey);
+
+    // Load analysis counts
+    const savedTotalAnalyses = localStorage.getItem('threadly_total_analyses');
+    if (savedTotalAnalyses) setTotalAnalyses(parseInt(savedTotalAnalyses, 10));
+
+    // Load daily analyses - check if it's a new day
+    const savedDailyData = localStorage.getItem('threadly_daily_analyses');
+    if (savedDailyData) {
+      const { date, count } = JSON.parse(savedDailyData);
+      const today = new Date().toDateString();
+      if (date === today) {
+        setDailyAnalyses(count);
+      } else {
+        // New day, reset daily count
+        setDailyAnalyses(0);
+        localStorage.setItem('threadly_daily_analyses', JSON.stringify({ date: today, count: 0 }));
+      }
+    }
+
+    // Load current user
+    const currentUser = getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
+    }
   }, []);
 
   useEffect(() => {
@@ -107,11 +147,11 @@ const App: React.FC = () => {
     }
     
     if (!apiKey?.trim()) {
-      return "API key not configured. Please add your Gemini API key in Settings.";
+      return `API key not configured. Please add your ${selectedProvider.toUpperCase()} API key in Settings.`;
     }
     
     return null;
-  }, [history, apiKey]);
+  }, [history, apiKey, selectedProvider]);
 
   const handleAnalyzeWithRetry = useCallback(async (attemptNumber = 0): Promise<void> => {
     const validationError = validateInputs();
@@ -136,10 +176,52 @@ const App: React.FC = () => {
     setResult(null);
     
     try {
-      lastApiRequestRef.current = Date.now();
+      const analysisStartTime = Date.now();
+      lastApiRequestRef.current = analysisStartTime;
       const data = await generateThreadlyAnalysis(history, scenario, tone, userContext, apiKey, selectedProvider);
+      const responseTime = Date.now() - analysisStartTime;
+      
       setResult(data);
       setRetryCount(0);
+      
+      // Increment analysis counts
+      const newTotal = totalAnalyses + 1;
+      setTotalAnalyses(newTotal);
+      localStorage.setItem('threadly_total_analyses', newTotal.toString());
+
+      // Increment daily count
+      const today = new Date().toDateString();
+      const savedDailyData = localStorage.getItem('threadly_daily_analyses');
+      let dailyCount = dailyAnalyses;
+      if (savedDailyData) {
+        const { date, count } = JSON.parse(savedDailyData);
+        if (date === today) {
+          dailyCount = count + 1;
+        } else {
+          dailyCount = 1; // New day
+        }
+      } else {
+        dailyCount = 1;
+      }
+      setDailyAnalyses(dailyCount);
+      localStorage.setItem('threadly_daily_analyses', JSON.stringify({ date: today, count: dailyCount }));
+      
+      // Save prompt to Supabase for monetization tracking (non-blocking)
+      if (user) {
+        savePromptToSupabase(
+          user.id,
+          history,
+          scenario,
+          tone,
+          userContext,
+          selectedProvider,
+          responseTime,
+          { occurred: false }
+        ).catch((error) => {
+          console.warn('Failed to save prompt to Supabase (non-blocking):', error);
+        });
+      }
+      
       showToast("Analysis complete! ✅");
     } catch (err) {
       console.error('Analysis error:', err);
@@ -179,11 +261,27 @@ Visit: https://console.cloud.google.com/quotas
       
       setError(errorMsg);
       setRetryCount(0);
+      
+      // Save failed prompt to Supabase for monitoring (non-blocking)
+      if (user && attemptNumber === 0) {
+        savePromptToSupabase(
+          user.id,
+          history,
+          scenario,
+          tone,
+          userContext,
+          selectedProvider,
+          null,
+          { occurred: true, message: errorMsg }
+        ).catch((error) => {
+          console.warn('Failed to save error prompt to Supabase (non-blocking):', error);
+        });
+      }
     } finally {
       setLoading(false);
       setIsAnalyzing(false);
     }
-  }, [history, scenario, tone, userContext, apiKey, validateInputs, showToast]);
+  }, [history, scenario, tone, userContext, apiKey, validateInputs, showToast, user, selectedProvider]);
 
   const handleAnalyze = useCallback(() => {
     handleAnalyzeWithRetry();
@@ -215,8 +313,9 @@ Visit: https://console.cloud.google.com/quotas
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [history, loading, error, activeView, handleAnalyze]);
 
-  const handleCopy = useCallback((text: string, type: string) => {
-    navigator.clipboard.writeText(text).then(() => {
+  const handleCopy = useCallback(async (text: string, type: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
       showToast("Response copied to clipboard!");
       const newCopy: CopiedResponse = {
         id: crypto.randomUUID(),
@@ -227,15 +326,41 @@ Visit: https://console.cloud.google.com/quotas
         feedbackGiven: false
       };
       setCopiedResponses(prev => [newCopy, ...prev.slice(0, 49)]); // Keep last 50
-    }).catch(() => {
+    } else {
       showToast("Failed to copy. Please try again.");
-    });
+    }
   }, [scenario, tone, showToast]);
 
   const handleSimulate = useCallback((response: any) => {
     setSelectedSimResponse(response);
     setIsSimOpen(true);
   }, []);
+
+  // Handle API testing
+  const handleTestAPI = useCallback(async () => {
+    if (!apiKey?.trim()) {
+      setTestResult({ status: 'error', message: `Please enter ${selectedProvider.toUpperCase()} API key first` });
+      return;
+    }
+
+    setTestingApi(true);
+    setTestResult(null);
+
+    try {
+      const result = await testProviderAPI(selectedProvider, apiKey);
+      setTestResult({
+        status: result.status,
+        message: result.message + (result.responseTime ? ` (${result.responseTime}ms)` : '')
+      });
+    } catch (error: any) {
+      setTestResult({
+        status: 'error',
+        message: `Test failed: ${error.message}`
+      });
+    } finally {
+      setTestingApi(false);
+    }
+  }, [apiKey, selectedProvider]);
 
   // Handle feedback submission
   const handleFeedbackSubmit = useCallback((feedbackData: FeedbackData) => {
@@ -254,8 +379,16 @@ Visit: https://console.cloud.google.com/quotas
 
     setFeedbackHistory((prev) => [newFeedback, ...prev]);
     setShowFeedbackModal(false);
+    
+    // Save feedback to Supabase for monetization tracking (non-blocking)
+    if (user) {
+      saveFeedbackToSupabase(user.id, newFeedback).catch((error) => {
+        console.warn('Failed to save feedback to Supabase (non-blocking):', error);
+      });
+    }
+    
     showToast('✨ Thank you for your feedback! It helps us improve.');
-  }, [scenario, tone, result, showToast]);
+  }, [scenario, tone, result, showToast, user]);
 
   // Development only: Mock data generator
   const addMockFeedback = useCallback(() => {
@@ -272,6 +405,62 @@ Visit: https://console.cloud.google.com/quotas
       showToast("Mock data added");
     }
   }, [showToast]);
+
+  // Authentication handlers
+  const handleLogin = useCallback(async (email: string, password: string): Promise<boolean> => {
+    const loggedInUser = login(email, password);
+    if (loggedInUser) {
+      setUser(loggedInUser);
+      
+      // Track login in Supabase (non-blocking)
+      trackUserLogin(loggedInUser.id, loggedInUser.email, 'login').catch((error) => {
+        console.warn('Failed to track login in Supabase (non-blocking):', error);
+      });
+      
+      showToast(`Welcome back, ${loggedInUser.name}!`);
+      return true;
+    }
+    return false;
+  }, [showToast]);
+
+  const handleSignUp = useCallback(async (email: string, password: string, name: string): Promise<boolean> => {
+    const success = signUp(email, password, name);
+    if (success) {
+      const newUser = getCurrentUser();
+      if (newUser) {
+        setUser(newUser);
+        
+        // Track signup in Supabase (non-blocking)
+        trackUserLogin(newUser.id, newUser.email, 'signup').catch((error) => {
+          console.warn('Failed to track signup in Supabase (non-blocking):', error);
+        });
+        
+        showToast(`Welcome to Threadly, ${newUser.name}!`);
+      }
+      return true;
+    }
+    return false;
+  }, [showToast]);
+
+  const handleLogout = useCallback(() => {
+    logout();
+    setUser(null);
+    setActiveView('home');
+    showToast('Logged out successfully');
+  }, [showToast]);
+
+  const handleUpdateProfile = useCallback((name: string) => {
+    if (user) {
+      const success = updateUserProfile(user.id, name);
+      if (success) {
+        const updatedUser = getCurrentUser();
+        if (updatedUser) {
+          setUser(updatedUser);
+          showToast('Profile updated successfully');
+        }
+      }
+    }
+  }, [user, showToast]);
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -308,6 +497,26 @@ Visit: https://console.cloud.google.com/quotas
                 <item.icon size={18} />
               </button>
             ))}
+            {user ? (
+              <button
+                onClick={() => setActiveView('profile')}
+                className={`p-2 rounded-lg transition-all duration-200 ${
+                  activeView === 'profile'
+                  ? 'text-white bg-white/10'
+                  : 'text-slate-500 hover:text-white hover:bg-white/5'
+                }`}
+                title="Profile"
+              >
+                <User size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold transition-colors"
+              >
+                Sign In
+              </button>
+            )}
           </nav>
         </div>
       </header>
@@ -557,8 +766,19 @@ Visit: https://console.cloud.google.com/quotas
                     + MOCK DATA
                    </button>
               </div>
-              <Dashboard feedbackHistory={feedbackHistory} totalAnalyses={feedbackHistory.length + 5} />
+              <Dashboard feedbackHistory={feedbackHistory} totalAnalyses={dailyAnalyses} />
            </div>
+        )}
+
+        {activeView === 'profile' && user && (
+          <Profile
+            user={user}
+            onLogout={handleLogout}
+            onUpdateProfile={handleUpdateProfile}
+            totalAnalyses={totalAnalyses}
+            dailyAnalyses={dailyAnalyses}
+            feedbackHistoryCount={feedbackHistory.length}
+          />
         )}
 
         {activeView === 'settings' && (
@@ -631,19 +851,10 @@ Visit: https://console.cloud.google.com/quotas
                         <p>Get your free API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">Google AI Studio</a></p>
                       </>
                     )}
-                    {selectedProvider === 'openai' && (
+                    {selectedProvider === 'huggingface' && (
                       <>
-                        <p>Get your API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">OpenAI Platform</a></p>
-                      </>
-                    )}
-                    {selectedProvider === 'claude' && (
-                      <>
-                        <p>Get your API key at <a href="https://console.anthropic.com/account/keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">Anthropic Console</a></p>
-                      </>
-                    )}
-                    {selectedProvider === 'openrouter' && (
-                      <>
-                        <p>Get your API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">OpenRouter Dashboard</a></p>
+                        <p>Get your API key at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">Hugging Face Settings</a></p>
+                        <p className="text-slate-600">Use the Hugging Face Router API for best performance</p>
                       </>
                     )}
                   </div>
@@ -671,6 +882,29 @@ Visit: https://console.cloud.google.com/quotas
                 >
                   Save API Key
                 </button>
+
+                <button
+                  onClick={handleTestAPI}
+                  disabled={!apiKey.trim() || apiKey.trim().length < 10 || testingApi}
+                  aria-label={`Test ${selectedProvider.toUpperCase()} API connection`}
+                  className={`w-full py-3 rounded-xl font-display font-bold tracking-wide transition-all duration-200 uppercase text-sm focus:ring-4 focus:outline-none ${
+                    apiKey.trim() && apiKey.trim().length >= 10 && !testingApi
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-600/30'
+                      : 'bg-slate-800 text-slate-600 cursor-not-allowed focus:ring-slate-600/30'
+                  }`}
+                >
+                  {testingApi ? 'Testing Connection...' : 'Test API Connection'}
+                </button>
+
+                {testResult && (
+                  <div className={`p-3 rounded-lg text-xs font-mono border ${
+                    testResult.status === 'success'
+                      ? 'bg-emerald-950/30 border-emerald-900/50 text-emerald-400'
+                      : 'bg-red-950/30 border-red-900/50 text-red-400'
+                  }`}>
+                    {testResult.status === 'success' ? '✓' : '✗'} {testResult.message}
+                  </div>
+                )}
 
                 {apiKey && (
                   <div className="p-3 bg-emerald-950/30 border border-emerald-900/50 text-emerald-400 rounded-lg text-xs font-mono">
@@ -702,11 +936,15 @@ Visit: https://console.cloud.google.com/quotas
                 <div className="pt-4">
                   <button 
                     onClick={() => {
-                      if(window.confirm("⚠️ This will permanently delete all local data including feedback history and copied responses. This action cannot be undone.\n\nAre you sure you want to continue?")) {
+                      if(window.confirm("⚠️ This will permanently delete all local data including feedback history, copied responses, and analysis counts. This action cannot be undone.\n\nAre you sure you want to continue?")) {
                         setFeedbackHistory([]);
                         setCopiedResponses([]);
+                        setTotalAnalyses(0);
+                        setDailyAnalyses(0);
                         localStorage.removeItem('threadly_feedback');
                         localStorage.removeItem('threadly_copied');
+                        localStorage.removeItem('threadly_total_analyses');
+                        localStorage.removeItem('threadly_daily_analyses');
                         showToast("All local data cleared successfully");
                       }
                     }}
@@ -750,6 +988,28 @@ Visit: https://console.cloud.google.com/quotas
         onSubmit={handleFeedbackSubmit}
         responseText={feedbackResponseText}
         scenario={scenario}
+      />
+
+      {/* Login Modal */}
+      <LoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onLogin={handleLogin}
+        onSwitchToSignUp={() => {
+          setShowLoginModal(false);
+          setShowSignUpModal(true);
+        }}
+      />
+
+      {/* Sign Up Modal */}
+      <SignUpModal
+        isOpen={showSignUpModal}
+        onClose={() => setShowSignUpModal(false)}
+        onSignUp={handleSignUp}
+        onSwitchToLogin={() => {
+          setShowSignUpModal(false);
+          setShowLoginModal(true);
+        }}
       />
       
     </div>
