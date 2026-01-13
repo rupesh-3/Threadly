@@ -103,27 +103,19 @@ CREATE INDEX IF NOT EXISTS idx_feedback_outcome ON feedback(outcome);
 For security, enable RLS on all tables. In Supabase SQL Editor:
 
 ```sql
--- Enable RLS on all tables
 ALTER TABLE user_logins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prompts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
 
--- Create policies to allow inserts (for tracking)
--- Note: Adjust these policies based on your security requirements
-
--- Allow anyone to insert login records (for tracking)
 CREATE POLICY "Allow insert on user_logins" ON user_logins
   FOR INSERT WITH CHECK (true);
 
--- Allow anyone to insert prompts (for tracking)
 CREATE POLICY "Allow insert on prompts" ON prompts
   FOR INSERT WITH CHECK (true);
 
--- Allow anyone to insert feedback (for tracking)
 CREATE POLICY "Allow insert on feedback" ON feedback
   FOR INSERT WITH CHECK (true);
 
--- Optional: Allow users to read their own data
 CREATE POLICY "Users can read own logins" ON user_logins
   FOR SELECT USING (auth.uid()::text = user_id);
 
